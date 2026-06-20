@@ -257,19 +257,27 @@ class ActionExecutor:
         return target.to_selector()
 
     def _build_selector_with_wait(self, target=None) -> dict | None:
-        """构建 selector 并等待控件出现。"""
+        """构建 selector 并等待控件出现。
+
+        注意：uiauto2 的 wait() RPC 方法不支持 description 参数，
+        会报 -32002 错误。所以等待时先去掉 description。
+        """
         selector = self._build_selector(target)
         if selector is None:
             return None
 
         # 使用 uiauto2 的 timeout 机制等待控件出现
+        # 去掉 description（wait RPC 不支持），用其余字段等
+        wait_selector = {k: v for k, v in selector.items() if k != "description"}
         try:
-            elem = self.device(**selector).wait(timeout=self.wait_timeout)
-            if elem.exists:
-                return selector
-            return None
+            if wait_selector:
+                elem = self.device(**wait_selector).wait(timeout=self.wait_timeout)
+                if elem.exists:
+                    return selector  # 返回完整 selector（含 description）给后续操作用
+            # wait 超时或无可用字段 → 仍返回完整 selector，让 execute 本身去尝试
+            return selector
         except Exception:
-            return selector  # 即使等不到也返回 selector，让 execute 本身去报错
+            return selector  # wait 异常也返回 selector，让 execute 去执行并分类错误
 
     @staticmethod
     def _format_target(target) -> str:
@@ -282,8 +290,12 @@ class ActionExecutor:
         """判断错误是否可重试。"""
         err_msg = str(exception).lower()
         retryable_keywords = [
+            # 通用控件未找到
             "not found", "no matching", "timeout",
             "uiobject", "null", "cannot locate",
+            # uiauto2 RPC 错误码（控件相关的一般都可重试）
+            "-32002", "-32006", "-32001",
+            "selector", "rpcerror", "jsonrpc error",
         ]
         if any(kw in err_msg for kw in retryable_keywords):
             return ExecutionStatus.RETRYABLE
