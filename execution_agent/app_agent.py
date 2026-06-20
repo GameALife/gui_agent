@@ -205,3 +205,39 @@ class AppAgent:
         print(f"{'=' * 50}\n")
 
         return report
+
+    def execute_task_tree_from_dict(self, tree_dict: dict) -> dict:
+        """
+        便捷入口：接收 TaskTree 的 JSON dict，内部转换为 TaskTree 对象后执行。
+
+        适用于直接从 task_tree.json 文件或推理层 run() 返回值传入。
+
+        Args:
+            tree_dict: 推理层输出的 JSON 字典（含 tasks 列表或 {T1: {...}, T2: {...}} 格式）
+
+        Returns:
+            dict: 执行报告
+        """
+        import json
+        from agent_reasoner.models import Task, TaskTree, TaskPriority
+
+        task_tree = TaskTree()
+
+        # 兼容两种格式：{T1: {...}, T2: {...}} 或 {"tasks": [{...}, {...}]}
+        if "tasks" in tree_dict:
+            items = tree_dict["tasks"]
+        else:
+            items = tree_dict.values()
+
+        for tdata in items:
+            task = Task(
+                id=tdata["id"],
+                name=tdata["name"],
+                description=tdata["description"],
+                dependencies=tdata.get("dependencies", []),
+                priority=TaskPriority(tdata.get("priority", "medium")),
+            )
+            task_tree.add_task(task)
+
+        return self.execute_task_tree(task_tree)
+
