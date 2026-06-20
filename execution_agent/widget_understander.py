@@ -126,6 +126,15 @@ class WidgetUnderstander:
 
         # 尝试直接解析
         text = text.strip()
+
+        # 处理 LLM 返回双花括号 {{ }} 的情况（学样了 prompt 模板中的转义）
+        if text.startswith("{{") and "}}" in text:
+            text = text.replace("{{", "{", 1)   # 只替换开头的 {{
+            # 替换最后的 }}
+            last_brace = text.rfind("}}")
+            if last_brace >= 0:
+                text = text[:last_brace] + "}" + text[last_brace + 2:]
+
         try:
             return json.loads(text)
         except json.JSONDecodeError:

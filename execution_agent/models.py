@@ -49,7 +49,9 @@ class WidgetTarget:
         return sel
 
     def is_empty(self) -> bool:
-        return not any([self.text, self.resource_id, self.class_name, self.content_desc])
+        """判断目标控件是否完全为空（没有任何定位信息）。"""
+        return not any([self.text, self.resource_id, self.class_name,
+                         self.content_desc, self.bounds])
 
     def summary(self) -> str:
         parts = []
