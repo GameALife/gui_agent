@@ -51,35 +51,26 @@ class WidgetUnderstander:
         return self._llm_match(step_intent, raw_text, screen_state, current_app_name)
 
     def _quick_match(self, intent: str) -> Action | None:
-        """快速规则匹配：不依赖控件树的纯意图判断。
+        """快速规则匹配：仅处理不需要目标控件的操作。
 
-        优先级从高到低：
-        1. 打开App（最具体的操作意图）
-        2. Home键 / 返回键（导航操作）
-        3. 等待（仅当是独立等待指令，而非附带说明）
+        只有以下操作可以短路（不需要 LLM 匹配控件）：
+        - press_back / press_home / wait
+
+        其他所有操作（click/set_text/swipe 等）都需要 LLM 在控件树中找目标，
+        所以这里必须返回 None，让流程走到 _llm_match()。
         """
         intent_lower = intent.lower()
         import re
 
-        # 1. 打开/启动 App —— 最高优先级，即使描述里含"等待"也先处理
-        if any(kw in intent_lower for kw in ["打开", "启动", "进入", "launch", "open"]):
-            # 排除纯导航类（如"打开设置"中的"打开"是通用的）
-            is_app_launch = any(
-                kw in intent_lower for kw in ["app", "应用", "软件", "音乐", "微信", "qq", "支付宝",
-                                              "淘宝", "抖音", "美团", "饿了么", "网易云", "bilibili"]
-            )
-            if "app" in intent_lower or is_app_launch or "启动" in intent_lower:
-                return Action(action_type=ActionType.CLICK, reasoning="检测到打开App操作")
-
-        # 2. Home 键
+        # Home 键
         if any(kw in intent_lower for kw in ["回到桌面", "返回主页", "home", "主屏幕"]):
             return Action(action_type=ActionType.PRESS_HOME, reasoning="检测到回到桌面操作")
 
-        # 3. 返回键
+        # 返回键
         if any(kw in intent_lower for kw in ["返回", "退回", "back", "回到上一页"]):
             return Action(action_type=ActionType.PRESS_BACK, reasoning="检测到返回操作")
 
-        # 4. 等待 —— 仅当是独立的等待指令（不是"等待XX启动/加载"这种附带说明）
+        # 独立等待指令（不是附带说明）
         if re.search(r"^等待[\d秒s]*$", intent_lower.strip()) or \
            intent_lower.strip() in ("等待", "稍候", "等待一下"):
             wait_match = re.search(r"等待?(\d+)?(?:秒|s)?", intent)
@@ -87,6 +78,7 @@ class WidgetUnderstander:
             return Action(action_type=ActionType.WAIT, wait_time=t,
                         reasoning=f"检测到独立等待指令，等待{t}秒")
 
+        # 其他所有操作（点击/输入/滑动/打开App等）→ 返回 None → 走 LLM 控件匹配
         return None
 
     def _llm_match(
