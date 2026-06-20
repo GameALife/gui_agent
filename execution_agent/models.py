@@ -32,7 +32,11 @@ class WidgetTarget:
     bounds: Optional[list] = None  # [x1, y1, x2, y2]
 
     def to_selector(self) -> dict:
-        """转为 uiautomator2 的 selector 字典。优先级：resource_id > text > class_name > content_desc"""
+        """转为 uiautomator2 的 selector 字典。
+
+        uiauto2 支持的 key：resourceId, text, className, description
+        注意：content-desc 在 uiauto2 中对应 key 名为 'description'，不是 'contentDescription'
+        """
         sel = {}
         if self.resource_id:
             sel["resourceId"] = self.resource_id
@@ -41,7 +45,7 @@ class WidgetTarget:
         if self.class_name:
             sel["className"] = self.class_name
         if self.content_desc:
-            sel["contentDescription"] = self.content_desc
+            sel["description"] = self.content_desc   # uiauto2 用 'description' 不是 'contentDescription'
         return sel
 
     def is_empty(self) -> bool:
