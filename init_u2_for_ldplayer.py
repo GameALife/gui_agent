@@ -84,17 +84,9 @@ def download_file(url, dest_path):
 
 
 def get_pip_cache_apk(name):
-    """尝试从 pip 缓存/ wheel 中找到预编译的 APK"""
-    # uiautomator2 包内嵌的资源路径
-    import importlib.resources
-    try:
-        # Python 3.9+
-        with importlib.path("uiautomator2", "") as p:
-            pkg_dir = str(p)
-    except TypeError:
-        # Python 3.8
-        import uiautomator2 as u2_pkg
-        pkg_dir = os.path.dirname(u2_pkg.__file__)
+    """尝试从 pip 安装的 uiautomator2 包中找到预编译的 APK"""
+    import uiautomator2 as u2_pkg
+    pkg_dir = os.path.dirname(u2_pkg.__file__)
 
     # 搜索 APK 文件
     for root, dirs, files in os.walk(pkg_dir):
