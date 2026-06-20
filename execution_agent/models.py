@@ -14,10 +14,11 @@ class ActionType(Enum):
     SET_TEXT = "set_text"
     SCROLL = "scroll"
     LONG_PRESS = "long_press"
-    SWIPE = "swiPE"
+    SWIPE = "swipe"
     PRESS_BACK = "press_back"
     PRESS_HOME = "press_home"
     WAIT = "wait"
+    KEY_EVENT = "key_event"       # ADB 键盘事件（搜索/回车/完成等）
 
 
 # ==================== 目标控件 ====================
@@ -73,6 +74,7 @@ class Action:
     reasoning: str = ""                     # LLM 选择该控件的推理过程
     swipe_direction: Optional[str] = None  # up / down / left / right
     wait_time: float = 0.0                 # WAIT 时等待的秒数
+    key_code: int = 0                      # KEY_EVENT 时要发送的键码（如66=回车/搜索）
 
     def summary(self) -> str:
         if self.action_type == ActionType.PRESS_BACK:
@@ -81,6 +83,11 @@ class Action:
             return "按Home键"
         if self.action_type == ActionType.WAIT:
             return f"等待 {self.wait_time}s"
+        if self.action_type == ActionType.KEY_EVENT:
+            key_names = {3: "HOME", 4: "BACK", 24: "音量+", 25: "音量-",
+                        66: "回车/搜索", 67: "删除(退格)", 84: "完成"}
+            name = key_names.get(self.key_code, f"KEY_{self.key_code}")
+            return f"按键 [{name}(code={self.key_code})]"
         if self.action_type == ActionType.SET_TEXT:
             target_str = self.target.summary() if self.target else "(无目标)"
             return f'在 [{target_str}] 输入 "{self.input_text}"'

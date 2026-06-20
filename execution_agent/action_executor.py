@@ -55,6 +55,7 @@ class ActionExecutor:
                 ActionType.PRESS_BACK: self._exec_press_back,
                 ActionType.PRESS_HOME: self._exec_press_home,
                 ActionType.WAIT: self._exec_wait,
+                ActionType.KEY_EVENT: self._exec_key_event,
             }.get(action.action_type)
 
             if handler is None:
@@ -249,6 +250,46 @@ class ActionExecutor:
         t = action.wait_time if action.wait_time > 0 else 2.0
         time.sleep(t)
         return ExecutionResult(success=True, action_summary=action.summary())
+
+    def _exec_key_event(self, action: Action) -> ExecutionResult:
+        """发送 ADB 键盘事件（用于软键盘上的搜索/回车/完成等按钮）。
+
+        软键盘是独立窗口，uiautomator2 的 dump_hierarchy 无法获取其内部控件，
+        所以无法用选择器或坐标点击。必须通过 ADB shell input keyevent 实现。
+        """
+        code = action.key_code if action.key_code > 0 else 66  # 默认 66 = 回车/搜索
+        key_names = {3: "HOME", 4: "BACK", 24: "音量+", 25: "音量-",
+                    66: "回车/搜索", 67: "退格删除", 84: "完成", 66: "搜索"}
+        name = key_names.get(code, f"KEY_{code}")
+
+        try:
+            # 方式1：通过 uiauto2 的 press（内部也是调 ADB）
+            self.device.press("enter" if code == 66 else str(code))
+            return ExecutionResult(
+                success=True,
+                actual_widget=f"ADB keyevent {code}({name})",
+                action_summary=action.summary(),
+            )
+        except Exception as e:
+            # 方式2：降级为直接调用 adb shell
+            try:
+                import subprocess
+                serial = self.device.serial or "127.0.0.1:5555"
+                subprocess.run(
+                    ["adb", "-s", serial, "shell", "input", "keyevent", str(code)],
+                    capture_output=True, timeout=10,
+                )
+                return ExecutionResult(
+                    success=True,
+                    actual_widget=f"ADB shell keyevent {code}({name})",
+                    action_summary=action.summary(),
+                )
+            except Exception as e2:
+                return ExecutionResult(
+                    success=False, status=ExecutionStatus.RETRYABLE,
+                    error=f"按键事件发送失败：{e} / {e2}",
+                    action_summary=action.summary(),
+                )
 
     # ==================== 降级方法（uiauto2 RPC 不兼容时使用）================
 

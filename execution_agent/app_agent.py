@@ -185,25 +185,39 @@ class AppAgent:
             ):
                 time.sleep(1.0)  # 等 UI 响应
                 verify_screen = self.captor.capture(screenshot=False)
-                # 简单验证：检查控件树是否变化（包名/Activity/内容变了）
+
+                # 检查控件树是否变化
                 changed = (
                     verify_screen.current_package != self._current_screen.current_package
                     or verify_screen.current_activity != self._current_screen.current_activity
                     or verify_screen.hierarchy_xml != self._current_screen.hierarchy_xml
                 )
+
+                # 判断这次操作是否用了坐标降级（从 action_summary 中检测）
+                used_fallback = "坐标" in result.action_summary or "ADB" in result.action_summary
+
                 if not changed:
-                    # 控件树没变 → 操作可能没生效，重试一次
+                    # 操作没生效！
                     if match_attempt < MAX_MATCH_RETRIES:
-                        print(f"     ⚠️ 操作后页面未变化，可能未生效，2s 后重试...")
+                        print(f"     ⚠️ 操作后页面未变化{'（使用了坐标/ADB降级）' if used_fallback else ''}，"
+                              f"2s 后重新匹配控件...")
                         time.sleep(2.0)
-                        continue
+                        continue  # 重新走完整流程：截屏→LLM匹配→执行
                     else:
-                        print(f"     ⚠️ 多次尝试后页面仍未变化，继续下一步")
+                        print(f"     ❌ 多次尝试后页面仍未变化，标记为失败")
+                        result = ExecutionResult(
+                            success=False,
+                            status=ExecutionStatus.RETRYABLE,
+                            error="操作执行后页面无变化（可能点击位置不准或元素不存在）",
+                            action_summary=result.action_summary,
+                        )
                 else:
                     self._current_screen = verify_screen
                     new_app = self.captor.get_current_app_name()
                     if new_app != current_app or verify_screen.current_activity != self._current_screen.current_activity:
                         print(f"     📱 页面已切换 → {new_app}")
+                    elif used_fallback:
+                        print(f"     ✅ 坐标/ADB降级操作生效，页面内容已更新")
 
             # 5. 记录日志
             log_entry = {
