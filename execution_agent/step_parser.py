@@ -125,11 +125,16 @@ class StepParser:
         from .models import Action, WidgetTarget
 
         matched_actions = []
+        matched_spans: list[tuple[int, int]] = []
         remaining_text = text
 
         for pattern, action_type, template in _ACTION_PATTERNS:
             match = re.search(pattern, text)
             if match:
+                start, end = match.span()
+                if any(start < old_end and end > old_start for old_start, old_end in matched_spans):
+                    continue
+
                 action = Action(action_type=action_type)
                 if action_type == ActionType.SET_TEXT and match.groups():
                     action.input_text = match.group(1)
@@ -149,6 +154,7 @@ class StepParser:
                     action.target = WidgetTarget(text=target_desc)
 
                 matched_actions.append(action)
+                matched_spans.append((start, end))
                 remaining_text = remaining_text.replace(match.group(0), "").strip()
 
         if not matched_actions:

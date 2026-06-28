@@ -221,7 +221,12 @@ class ActionExecutor:
     def _exec_swipe(self, action: Action) -> ExecutionResult:
         """滑动操作。"""
         direction = action.swipe_direction or "up"
-        direction_map = {"up": "up", "down": "down", "left": "left", "right": "right"}
+        direction_map = {
+            "up": "up", "上": "up", "向上": "up",
+            "down": "down", "下": "down", "向下": "down",
+            "left": "left", "左": "left", "向左": "left",
+            "right": "right", "右": "right", "向右": "right",
+        }
         actual_dir = direction_map.get(direction.lower(), "up")
 
         try:
@@ -259,7 +264,7 @@ class ActionExecutor:
         """
         code = action.key_code if action.key_code > 0 else 66  # 默认 66 = 回车/搜索
         key_names = {3: "HOME", 4: "BACK", 24: "音量+", 25: "音量-",
-                    66: "回车/搜索", 67: "退格删除", 84: "完成", 66: "搜索"}
+                    66: "回车/搜索", 67: "退格删除", 84: "完成"}
         name = key_names.get(code, f"KEY_{code}")
 
         try:
@@ -373,7 +378,8 @@ class ActionExecutor:
         """构建 uiauto2 selector 字典。"""
         if target is None:
             return None
-        return target.to_selector()
+        selector = target.to_selector()
+        return selector or None
 
     def _build_selector_with_wait(self, target=None) -> dict | None:
         """构建 selector 并等待控件出现。

@@ -23,7 +23,9 @@ from .screen_state import ScreenCaptor, ScreenState
 from .step_parser import StepParser
 from .widget_understander import WidgetUnderstander
 from .action_executor import ActionExecutor
-from .models import ExecutionResult, ExecutionStatus, Step
+from .action_planner import ActionPlanner
+from .evaluator import Evaluator
+from .models import Action, ExecutionResult, ExecutionStatus, Step
 
 if TYPE_CHECKING:
     from ..agent_reasoner.llm_client import LLMClient
@@ -46,7 +48,9 @@ class AppAgent:
         self.captor = ScreenCaptor(device)
         self.parser = StepParser(llm)
         self.understander = WidgetUnderstander(llm)
+        self.action_planner = ActionPlanner(self.understander)
         self.executor = ActionExecutor(device)
+        self.evaluator = Evaluator(llm)
 
         # 执行状态
         self.execution_log: list[dict] = []   # 操作日志
@@ -134,7 +138,31 @@ class AppAgent:
         return ExecutionResult(success=True, action_summary=f"[{task.id}] 所有步骤完成")
 
     def _execute_single_step(self, step: Step, task_name: str) -> ExecutionResult:
-        """执行单个原子步骤：采集屏幕 → 控件匹配 → 执行操作。"""
+        """执行单个原子步骤：动作规划 → 采集屏幕 → 控件匹配 → 执行操作。"""
+        planned_hints = step.actions or [None]
+
+        last_result: ExecutionResult | None = None
+        for action_idx, hinted_action in enumerate(planned_hints, 1):
+            if len(planned_hints) > 1:
+                print(f"     子动作 {action_idx}/{len(planned_hints)}")
+
+            result = self._execute_one_action(step, task_name, hinted_action)
+            last_result = result
+            if not result.success:
+                return result
+
+        return last_result or ExecutionResult(
+            success=True,
+            action_summary=f"[{task_name}] {step.intent}",
+        )
+
+    def _execute_one_action(
+        self,
+        step: Step,
+        task_name: str,
+        hinted_action: Action | None = None,
+    ) -> ExecutionResult:
+        """执行一个规划动作，包含控件匹配重试、执行和页面变化校验。"""
         from .models import ActionType
 
         MAX_MATCH_RETRIES = 2  # 控件匹配重试（App加载中场景）
@@ -144,13 +172,13 @@ class AppAgent:
             self._current_screen = self.captor.capture()
             current_app = self.captor.get_current_app_name()
 
-            # 2. 控件理解：LLM 匹配目标控件
+            # 2. Action Planner：规则动作可直接执行；目标不完整时调用 LLM 补全控件
             try:
-                action = self.understander.find_action(
-                    step_intent=step.intent,
-                    raw_text=step.raw_text,
+                action = self.action_planner.resolve(
+                    step=step,
                     screen_state=self._current_screen,
                     current_app_name=current_app,
+                    hinted_action=hinted_action,
                 )
             except Exception as e:
                 if match_attempt < MAX_MATCH_RETRIES:
@@ -166,7 +194,7 @@ class AppAgent:
             # 3. 空目标检测：需要控件的操作但目标为空 → 页面可能未加载，等一下重试
             needs_target = action.action_type in (
                 ActionType.CLICK, ActionType.SET_TEXT,
-                ActionType.SCROLL, ActionType.LONG_PRESS,
+                ActionType.LONG_PRESS,
             )
             if needs_target and (action.target is None or action.target.is_empty()):
                 if match_attempt < MAX_MATCH_RETRIES:
@@ -179,28 +207,38 @@ class AppAgent:
             # 4. 执行操作（带内置重试）
             result = self.executor.execute_with_retry(action)
 
-            # 4.5 操作后验证：确认操作真的生效了（不只是"没报错"）
+            evaluation_reason = ""
+            evaluation_changed = False
+
+            # 4.5 Evaluation：确认操作真的生效了（不只是"没报错"）
             if result.success and action.action_type in (
                 ActionType.CLICK, ActionType.SET_TEXT,
             ):
                 time.sleep(1.0)  # 等 UI 响应
                 verify_screen = self.captor.capture(screenshot=False)
-
-                # 检查控件树是否变化
-                changed = (
-                    verify_screen.current_package != self._current_screen.current_package
-                    or verify_screen.current_activity != self._current_screen.current_activity
-                    or verify_screen.hierarchy_xml != self._current_screen.hierarchy_xml
-                )
+                verify_app = self.captor.get_current_app_name()
 
                 # 判断这次操作是否用了坐标降级（从 action_summary 中检测）
-                used_fallback = "坐标" in result.action_summary or "ADB" in result.action_summary
+                result_detail = f"{result.action_summary or ''} {result.actual_widget or ''}"
+                used_fallback = "坐标" in result_detail or "ADB" in result_detail
 
-                if not changed:
+                evaluation = self.evaluator.evaluate(
+                    action=action,
+                    step_intent=step.intent,
+                    before=self._current_screen,
+                    after=verify_screen,
+                    execution_result=result,
+                    before_app=current_app,
+                    after_app=verify_app,
+                )
+                evaluation_reason = evaluation.reason
+                evaluation_changed = evaluation.changed
+
+                if not evaluation.success:
                     # 操作没生效！
                     if match_attempt < MAX_MATCH_RETRIES:
                         print(f"     ⚠️ 操作后页面未变化{'（使用了坐标/ADB降级）' if used_fallback else ''}，"
-                              f"2s 后重新匹配控件...")
+                              f"2s 后重新匹配控件... 原因：{evaluation.reason}")
                         time.sleep(2.0)
                         continue  # 重新走完整流程：截屏→LLM匹配→执行
                     else:
@@ -208,16 +246,18 @@ class AppAgent:
                         result = ExecutionResult(
                             success=False,
                             status=ExecutionStatus.RETRYABLE,
-                            error="操作执行后页面无变化（可能点击位置不准或元素不存在）",
+                            error=evaluation.reason or "操作执行后页面无变化（可能点击位置不准或元素不存在）",
                             action_summary=result.action_summary,
                         )
                 else:
+                    old_activity = self._current_screen.current_activity
                     self._current_screen = verify_screen
-                    new_app = self.captor.get_current_app_name()
-                    if new_app != current_app or verify_screen.current_activity != self._current_screen.current_activity:
-                        print(f"     📱 页面已切换 → {new_app}")
+                    if verify_app != current_app or verify_screen.current_activity != old_activity:
+                        print(f"     📱 页面已切换 → {verify_app}")
                     elif used_fallback:
                         print(f"     ✅ 坐标/ADB降级操作生效，页面内容已更新")
+                    elif evaluation.reason:
+                        print(f"     ✅ 验证通过：{evaluation.reason}")
 
             # 5. 记录日志
             log_entry = {
@@ -228,13 +268,14 @@ class AppAgent:
                 "success": result.success,
                 "error": result.error,
                 "retry_count": result.retry_count,
+                "evaluation": evaluation_reason,
                 "screenshot": result.screenshot_path or self._current_screen.screenshot_path,
             }
             self.execution_log.append(log_entry)
 
             # 6. 操作后等待页面响应（智能等待：页面变化后才继续）
             if result.success:
-                if action.action_type.value in ("click",):
+                if action.action_type.value in ("click",) and not evaluation_changed:
                     new_screen = self.captor.wait_for_change(
                         timeout=8.0, interval=1.0, old_state=self._current_screen,
                     )
@@ -321,4 +362,3 @@ class AppAgent:
             task_tree.add_task(task)
 
         return self.execute_task_tree(task_tree)
-

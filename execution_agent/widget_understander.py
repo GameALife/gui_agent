@@ -185,20 +185,22 @@ class WidgetUnderstander:
         action_str = result.get("action", "click")
         action_type = self._parse_action_type(action_str)
 
-        target_data = result.get("target", {})
+        target_data = result.get("target") or {}
+        if not isinstance(target_data, dict):
+            target_data = {}
         target = WidgetTarget(
             text=target_data.get("text") or None,
             resource_id=target_data.get("resource_id") or None,
             class_name=target_data.get("class") or None,
             content_desc=target_data.get("content_desc") or None,
-            bounds=target_data.get("bounds"),
+            bounds=self._parse_bounds(target_data.get("bounds")),
         )
 
         input_text = result.get("input_text") or None
         swipe_direction = result.get("swipe_direction") or None
-        wait_time = float(result.get("wait_time", 0) or 0)
+        wait_time = self._parse_float(result.get("wait_time"), default=0.0)
         reasoning = result.get("reasoning", "")
-        key_code = int(result.get("key_code", 0) or 0)
+        key_code = self._parse_int(result.get("key_code"), default=0)
 
         action = Action(
             action_type=action_type,
@@ -229,13 +231,31 @@ class WidgetUnderstander:
         if any(kw in reasoning for kw in keyboard_keywords):
             return True
 
-        # 检查目标控件的 class_name 是否是键盘相关
+        # 检查目标控件的 class_name 是否是键盘相关。EditText 是输入框本身，不是键盘按钮。
         if action.target and action.target.class_name:
-            kb_classes = ["EditText", "inputmethod", "Keyboard"]
-            if any(kb in (action.target.class_name or "") for kb in kb_classes):
+            kb_classes = ["InputMethod", "Keyboard", "ime"]
+            class_name = action.target.class_name or ""
+            if any(kb.lower() in class_name.lower() for kb in kb_classes):
                 return True
 
         return False
+
+    @staticmethod
+    def _parse_bounds(bounds) -> list[int] | None:
+        """兼容 LLM 返回的 list 或 XML 中常见的 bounds 字符串。"""
+        if bounds is None or bounds == "":
+            return None
+        if isinstance(bounds, (list, tuple)) and len(bounds) == 4:
+            try:
+                return [int(float(v)) for v in bounds]
+            except (TypeError, ValueError):
+                return None
+        if isinstance(bounds, str):
+            import re
+            nums = re.findall(r"-?\d+", bounds)
+            if len(nums) >= 4:
+                return [int(n) for n in nums[:4]]
+        return None
 
     @staticmethod
     def _parse_action_type(action_str: str) -> ActionType:
@@ -251,6 +271,20 @@ class WidgetUnderstander:
             "key_event": ActionType.KEY_EVENT,
         }
         return mapping.get(action_str.lower(), ActionType.CLICK)
+
+    @staticmethod
+    def _parse_float(value, default: float = 0.0) -> float:
+        try:
+            return float(value or default)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _parse_int(value, default: int = 0) -> int:
+        try:
+            return int(float(value or default))
+        except (TypeError, ValueError):
+            return default
 
     @staticmethod
     def _truncate_xml(xml: str, max_length: int = 15000) -> str:
